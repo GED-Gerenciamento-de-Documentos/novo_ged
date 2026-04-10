@@ -1,0 +1,118 @@
+
+services:
+  # ==============================
+  # PostgreSQL — Banco de Metadados
+  # ==============================
+  postgres:
+    image: postgres:16-alpine
+    container_name: ged_postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-ged_user}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-ged_secret_password}
+      POSTGRES_DB: ${POSTGRES_DB:-ged_metadata}
+      PGDATA: /var/lib/postgresql/data/pgdata
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./docker/postgres/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-ged_user} -d ${POSTGRES_DB:-ged_metadata}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - ged_network
+
+  # ==============================
+  # Redis — Cache & Token Blacklist
+  # ==============================
+  redis:
+    image: redis:7-alpine
+    container_name: ged_redis
+    restart: unless-stopped
+    command: >
+      redis-server
+      --requirepass ${REDIS_PASSWORD:-redis_secret_password}
+      --maxmemory 256mb
+      --maxmemory-policy allkeys-lru
+      --appendonly yes
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "--no-auth-warning", "-a", "${REDIS_PASSWORD:-redis_secret_password}", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - ged_network
+
+  # ==============================
+  # GED API — FastAPI Application
+  # ==============================
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: ged_api
+    restart: unless-stopped
+    ports:
+      - "${APP_PORT:-8000}:8000"
+    env_file:
+      - .env
+    environment:
+      - POSTGRES_HOST=postgres
+      - REDIS_HOST=redis
+    volumes:
+      - ./src:/app/src
+      - nfs_mount:/mnt/nfs:ro   # Montar NFS como read-only
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    networks:
+      - ged_network
+
+  # ==============================
+  # PGAdmin — Interface Web para PostgreSQL (dev only)
+  # ==============================
+  pgadmin:
+    image: dpage/pgadmin4:latest
+    container_name: ged_pgadmin
+    restart: unless-stopped
+    profiles: ["dev"]
+    environment:
+      PGADMIN_DEFAULT_EMAIL: admin@ged.com
+      PGADMIN_DEFAULT_PASSWORD: pgadmin_password
+    ports:
+      - "5050:80"
+    depends_on:
+      - postgres
+    networks:
+      - ged_network
+
+volumes:
+  postgres_data:
+    driver: local
+  redis_data:
+    driver: local
+  nfs_mount:
+    driver: local
+    driver_opts:
+      type: cifs
+      o: "addr=192.168.8.53,username=${GED_SMB_USER},password=${GED_SMB_PASSWORD},domain=${GED_SMB_DOMAIN},ro"
+      device: "//192.168.8.53/GED"
+
+networks:
+  ged_network:
+    driver: bridge
