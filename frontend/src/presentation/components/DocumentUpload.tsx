@@ -1,5 +1,6 @@
-import { useState, useRef } from 'react'
+import { useState, useRef, useEffect } from 'react'
 import type { DragEvent, ChangeEvent, FormEvent } from 'react'
+import { PDFDocument, degrees } from 'pdf-lib'
 import { uploadDocument } from '../../infrastructure/http/documentApi'
 import type { UploadedDocument, UploadError } from '../../infrastructure/http/documentApi'
 
@@ -45,7 +46,17 @@ export function DocumentUpload() {
   const [errorFiles, setErrorFiles] = useState<UploadError[]>([])
   const [successMessage, setSuccessMessage] = useState('')
   const [errorMsg, setErrorMsg] = useState('')
+  const [previewFile, setPreviewFile] = useState<{ file: File; index: number } | null>(null)
+  const [previewUrl, setPreviewUrl] = useState<string | null>(null)
+  const [rotating, setRotating] = useState(false)
   const inputRef = useRef<HTMLInputElement>(null)
+
+  // Limpar URL do preview ao fechar ou mudar
+  useEffect(() => {
+    return () => {
+      if (previewUrl) URL.revokeObjectURL(previewUrl)
+    }
+  }, [previewUrl])
 
   const ACCEPTED_EXT = ACCEPTED_TYPES.map(e => e.replace('.', ''))
 
@@ -103,6 +114,91 @@ export function DocumentUpload() {
       newFiles[index + 1] = temp
       return newFiles
     })
+  }
+
+  const openPreview = (file: File, index: number) => {
+    if (previewUrl) URL.revokeObjectURL(previewUrl)
+    const url = URL.createObjectURL(file)
+    setPreviewUrl(url)
+    setPreviewFile({ file, index })
+  }
+
+  const closePreview = () => {
+    setPreviewFile(null)
+    if (previewUrl) URL.revokeObjectURL(previewUrl)
+    setPreviewUrl(null)
+  }
+
+  const rotate90 = async () => {
+    if (!previewFile || rotating) return
+    setRotating(true)
+
+    try {
+      const { file, index } = previewFile
+      const ext = file.name.split('.').pop()?.toLowerCase() ?? ''
+      let rotatedBlob: Blob
+
+      if (ext === 'pdf') {
+        // Rotação de PDF usando pdf-lib
+        const arrayBuffer = await file.arrayBuffer()
+        const pdfDoc = await PDFDocument.load(arrayBuffer)
+        const pages = pdfDoc.getPages()
+        
+        pages.forEach(page => {
+          const currentRotation = page.getRotation().angle
+          page.setRotation(degrees(currentRotation + 90))
+        })
+        
+        const pdfBytes = await pdfDoc.save()
+        rotatedBlob = new Blob([pdfBytes], { type: 'application/pdf' })
+      } else {
+        // Rotação de Imagem usando Canvas
+        rotatedBlob = await new Promise((resolve, reject) => {
+          const img = new Image()
+          img.onload = () => {
+            const canvas = document.createElement('canvas')
+            const ctx = canvas.getContext('2d')
+            if (!ctx) return reject(new Error('Canvas context failed'))
+
+            // Troca largura por altura na rotação de 90 graus
+            canvas.width = img.height
+            canvas.height = img.width
+
+            ctx.translate(canvas.width / 2, canvas.height / 2)
+            ctx.rotate((90 * Math.PI) / 180)
+            ctx.drawImage(img, -img.width / 2, -img.height / 2)
+
+            canvas.toBlob((blob) => {
+              if (blob) resolve(blob)
+              else reject(new Error('Canvas toBlob failed'))
+            }, file.type)
+          }
+          img.onerror = reject
+          img.src = URL.createObjectURL(file)
+        })
+      }
+
+      const rotatedFile = new File([rotatedBlob], file.name, { type: file.type })
+      
+      // Atualizar lista global
+      setFiles(prev => {
+        const next = [...prev]
+        next[index] = rotatedFile
+        return next
+      })
+
+      // Atualizar preview atual
+      const newUrl = URL.createObjectURL(rotatedFile)
+      if (previewUrl) URL.revokeObjectURL(previewUrl)
+      setPreviewUrl(newUrl)
+      setPreviewFile({ file: rotatedFile, index })
+
+    } catch (err) {
+      console.error('Erro ao rotacionar:', err)
+      alert('Erro ao rotacionar o arquivo.')
+    } finally {
+      setRotating(false)
+    }
   }
 
   const onDrop = (e: DragEvent<HTMLDivElement>) => {
@@ -263,6 +359,14 @@ export function DocumentUpload() {
                     >
                       ⬇️
                     </button>
+                    <button
+                      type="button"
+                      onClick={(e) => { e.stopPropagation(); openPreview(f, i) }}
+                      title="Pré-visualizar"
+                      style={{ background: 'none', border: 'none', cursor: 'pointer', marginLeft: '4px' }}
+                    >
+                      👁️
+                    </button>
                   </div>
                   <button
                     type="button"
@@ -378,6 +482,44 @@ export function DocumentUpload() {
             </button>
           </div>
         </form>
+      )}
+
+      {/* ─── Preview Modal ────────────────────────────────────────────────── */}
+      {previewFile && previewUrl && (
+        <div className="modal-overlay" onClick={closePreview}>
+          <div className="modal-content" onClick={(e) => e.stopPropagation()}>
+            <div className="modal-header">
+              <div style={{ display: 'flex', flexDirection: 'column' }}>
+                <span style={{ fontWeight: 600 }}>{previewFile.file.name}</span>
+                <span style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
+                  {formatBytes(previewFile.file.size)}
+                </span>
+              </div>
+              <div style={{ display: 'flex', gap: '12px', alignItems: 'center' }}>
+                <button 
+                  className="btn-secondary" 
+                  style={{ padding: '8px 16px', borderRadius: '8px', fontSize: '0.85rem' }}
+                  onClick={rotate90}
+                  disabled={rotating}
+                >
+                  {rotating ? '⏳...' : '↻ Rotacionar 90º'}
+                </button>
+                <button className="btn-close" onClick={closePreview}>✕</button>
+              </div>
+            </div>
+            <div className="modal-body">
+              {previewFile.file.type === 'application/pdf' ? (
+                <iframe 
+                  src={`${previewUrl}#toolbar=0&navpanes=0`} 
+                  style={{ width: '100%', height: '100%', border: 'none' }}
+                  title="PDF Preview"
+                />
+              ) : (
+                <img src={previewUrl} alt="Preview" className="modal-image" />
+              )}
+            </div>
+          </div>
+        </div>
       )}
     </div>
   )
