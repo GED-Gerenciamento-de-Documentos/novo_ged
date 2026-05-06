@@ -83,6 +83,28 @@ export function DocumentUpload() {
     setFiles(prev => prev.filter((_, i) => i !== index))
   }
 
+  const moveFileUp = (index: number) => {
+    if (index === 0) return
+    setFiles(prev => {
+      const newFiles = [...prev]
+      const temp = newFiles[index]
+      newFiles[index] = newFiles[index - 1]
+      newFiles[index - 1] = temp
+      return newFiles
+    })
+  }
+
+  const moveFileDown = (index: number) => {
+    if (index === files.length - 1) return
+    setFiles(prev => {
+      const newFiles = [...prev]
+      const temp = newFiles[index]
+      newFiles[index] = newFiles[index + 1]
+      newFiles[index + 1] = temp
+      return newFiles
+    })
+  }
+
   const onDrop = (e: DragEvent<HTMLDivElement>) => {
     e.preventDefault()
     setDragging(false)
@@ -221,6 +243,26 @@ export function DocumentUpload() {
                   <div className="file-queue-info">
                     <span className="file-name">{f.name}</span>
                     <span className="file-size">{formatBytes(f.size)}</span>
+                  </div>
+                  <div style={{ display: 'flex', gap: '4px', marginRight: '16px' }}>
+                    <button
+                      type="button"
+                      onClick={(e) => { e.stopPropagation(); moveFileUp(i) }}
+                      disabled={i === 0}
+                      title="Mover para cima"
+                      style={{ cursor: i === 0 ? 'not-allowed' : 'pointer', background: 'none', border: 'none', opacity: i === 0 ? 0.3 : 1 }}
+                    >
+                      ⬆️
+                    </button>
+                    <button
+                      type="button"
+                      onClick={(e) => { e.stopPropagation(); moveFileDown(i) }}
+                      disabled={i === files.length - 1}
+                      title="Mover para baixo"
+                      style={{ cursor: i === files.length - 1 ? 'not-allowed' : 'pointer', background: 'none', border: 'none', opacity: i === files.length - 1 ? 0.3 : 1 }}
+                    >
+                      ⬇️
+                    </button>
                   </div>
                   <button
                     type="button"
