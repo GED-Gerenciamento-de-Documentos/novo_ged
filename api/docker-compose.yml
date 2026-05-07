@@ -70,7 +70,7 @@ services:
       - ./src:/app/src
       - ./migrations:/app/migrations
       - ./alembic.ini:/app/alembic.ini
-      - nfs_mount:/mnt/nfs:ro   # Montar NFS como read-only
+      # - nfs_mount:/mnt/nfs:ro   # Montar NFS como read-only (comentado temporariamente para testes com AWS S3)
     depends_on:
       postgres:
         condition: service_healthy

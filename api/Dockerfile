@@ -3,6 +3,8 @@ FROM python:3.11-slim-bookworm
 # Instalar dependências do sistema para Oracle (Instant Client) e JBIG2
 RUN apt-get update && apt-get install -y --no-install-recommends \
     gcc \
+    tree \
+    vim \
     libc6-dev \
     libffi-dev \
     curl \
@@ -14,7 +16,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libaio1 \
     wget \
     unzip \
-    && rm -rf /var/lib/apt/lists/*
+    ca-certificates && \
+    rm -rf /var/lib/apt/lists/*
 
 # Instalar Oracle Instant Client Basic Light (para oracledb thick mode) no Linux
 RUN mkdir -p /opt/oracle && \

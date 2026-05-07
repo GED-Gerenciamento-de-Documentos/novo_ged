@@ -14,5 +14,9 @@ CREATE EXTENSION IF NOT EXISTS "unaccent";
 GRANT ALL PRIVILEGES ON SCHEMA ged TO root;
 GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA ged TO root;
 GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA ged TO root;
-ALTER DEFAULT PRIVILEGES IN SCHEMA ged GRANT ALL ON TABLES TO root;
 ALTER DEFAULT PRIVILEGES IN SCHEMA ged GRANT ALL ON SEQUENCES TO root;
+
+-- Inserir usuário mock para ambiente de desenvolvimento (evitar erro de foreign key no upload-dev)
+INSERT INTO ged.users (id, name, email, password_hash, role, department, is_active) 
+VALUES ('00000000-0000-0000-0000-000000000000', 'Desenvolvedor', 'dev@localhost', 'fake_hash', 'ADMINISTRADOR', 'TI', true) 
+ON CONFLICT (id) DO NOTHING;

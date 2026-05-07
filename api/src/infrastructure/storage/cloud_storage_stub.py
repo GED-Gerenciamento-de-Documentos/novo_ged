@@ -140,10 +140,8 @@ def get_cloud_storage() -> IStorage:
         case "stub" | "local":
             return LocalCloudStorageStub()
         case "s3":
-            # TODO: Implementar quando AWS for escolhida
-            # from src.infrastructure.storage.aws_s3_storage import AwsS3Storage
-            # return AwsS3Storage()
-            raise NotImplementedError("AWS S3 storage ainda não configurado.")
+            from src.infrastructure.storage.aws_s3_storage import AwsS3Storage
+            return AwsS3Storage()
         case "azure":
             # TODO: Implementar quando Azure for escolhida
             # from src.infrastructure.storage.azure_blob_storage import AzureBlobStorage
