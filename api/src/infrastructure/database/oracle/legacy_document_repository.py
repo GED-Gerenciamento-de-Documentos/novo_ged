@@ -26,30 +26,34 @@ class LegacyDocumentRepository:
     # ==========================================
     # ADAPTAR: Nomes das tabelas legadas
     # ==========================================
-    TABLE_DOCUMENTS = "GED_DOCUMENTOS"       # Ajustar para o nome real
-    TABLE_METADATA = "GED_METADADOS"         # Ajustar para o nome real
+    TABLE_DOCUMENTS = "DBAMV.GED_DOCUMENTO"
+    TABLE_VERSIONS = "DBAMV.GED_VERSAO_DOCUMENTO"
+    TABLE_CONTENT = "DBAMV.GED_CONTEUDO"
 
     @staticmethod
-    async def find_document_path_by_id(legacy_document_id: str) -> Optional[str]:
+    async def get_document_content(legacy_document_id: str) -> Optional[bytes]:
         """
-        Busca o caminho do arquivo no NFS a partir do ID no sistema legado.
-        Retorna o path relativo ao NFS mount point.
+        Busca o conteúdo (BLOB) do arquivo no banco Oracle.
         """
         if not OracleLegacyConnection.is_available():
-            logger.warning("oracle_unavailable", action="find_document_path")
+            logger.warning("oracle_unavailable", action="get_document_content")
             return None
 
-        # ADAPTAR: Ajustar SQL ao schema real do Oracle 11g
+        import asyncio
         sql = f"""
-            SELECT CAMINHO_ARQUIVO
-            FROM {LegacyDocumentRepository.TABLE_DOCUMENTS}
-            WHERE ID_DOCUMENTO = :doc_id
+            SELECT c.BLOB_CONTEUDO
+            FROM {LegacyDocumentRepository.TABLE_CONTENT} c
+            JOIN {LegacyDocumentRepository.TABLE_DOCUMENTS} d ON c.CD_DOCUMENTO = d.CD_DOCUMENTO
+            WHERE c.CD_DOCUMENTO = :doc_id
+              AND c.CD_VERSAO = d.CD_VERSAO_ATUAL
             AND ROWNUM = 1
         """
-        result = await OracleLegacyConnection.execute_query_one(
-            sql, {"doc_id": legacy_document_id}
+        result = await asyncio.to_thread(
+            OracleLegacyConnection.execute_query_one, sql, {"doc_id": legacy_document_id}
         )
-        return result.get("caminho_arquivo") if result else None
+        if result and result.get("blob_conteudo"):
+            return result.get("blob_conteudo").read()
+        return None
 
     @staticmethod
     async def search_documents(
@@ -63,8 +67,6 @@ class LegacyDocumentRepository:
     ) -> list[dict]:
         """
         Busca documentos legados no Oracle 11g.
-
-        ADAPTAR: Ajustar SQL ao schema real do sistema legado.
         """
         if not OracleLegacyConnection.is_available():
             logger.warning("oracle_unavailable", action="search_documents")
@@ -74,49 +76,47 @@ class LegacyDocumentRepository:
         params = {}
 
         if owner_name:
-            conditions.append("UPPER(NOME_PROPRIETARIO) LIKE UPPER(:nome)")
+            # Como não encontramos o nome do paciente, vamos buscar no título do documento (DS_DOCUMENTO)
+            conditions.append("UPPER(DS_DOCUMENTO) LIKE UPPER(:nome)")
             params["nome"] = f"%{owner_name}%"
 
-        if owner_cpf:
-            conditions.append("CPF = :cpf")
-            params["cpf"] = owner_cpf
+        # CPF ignorado pois não está na tabela
 
         if document_type:
-            conditions.append("TIPO_DOCUMENTO = :tipo")
+            conditions.append("CD_TIPO_DOCUMENTO = :tipo")
             params["tipo"] = document_type
 
         if date_from:
-            conditions.append("DATA_DOCUMENTO >= TO_DATE(:data_inicio, 'YYYY-MM-DD')")
+            conditions.append("DT_CRIACAO >= TO_DATE(:data_inicio, 'YYYY-MM-DD')")
             params["data_inicio"] = date_from
 
         if date_to:
-            conditions.append("DATA_DOCUMENTO <= TO_DATE(:data_fim, 'YYYY-MM-DD')")
+            conditions.append("DT_CRIACAO <= TO_DATE(:data_fim, 'YYYY-MM-DD')")
             params["data_fim"] = date_to
 
         where_clause = " AND ".join(conditions)
         offset = (page - 1) * page_size
 
-        # Oracle 11g não tem OFFSET/FETCH NEXT — usa ROWNUM
-        # ADAPTAR: Ajustar SQL ao schema real
         sql = f"""
             SELECT *
             FROM (
                 SELECT d.*, ROWNUM AS RN
                 FROM (
                     SELECT
-                        ID_DOCUMENTO,
-                        TITULO,
-                        TIPO_DOCUMENTO,
-                        NOME_PROPRIETARIO,
-                        CPF,
-                        NUM_PRONTUARIO,
-                        DATA_DOCUMENTO,
-                        CAMINHO_ARQUIVO,
-                        FORMATO_ARQUIVO,
-                        DATA_CADASTRO
-                    FROM {LegacyDocumentRepository.TABLE_DOCUMENTS}
+                        d.CD_DOCUMENTO as ID_DOCUMENTO,
+                        d.DS_DOCUMENTO as TITULO,
+                        d.CD_TIPO_DOCUMENTO as TIPO_DOCUMENTO,
+                        'Paciente Legado' as NOME_PROPRIETARIO,
+                        '000.000.000-00' as CPF,
+                        '' as NUM_PRONTUARIO,
+                        d.DT_CRIACAO as DATA_DOCUMENTO,
+                        v.TP_FORMATO as FORMATO_ARQUIVO,
+                        d.DT_CRIACAO as DATA_CADASTRO
+                    FROM {LegacyDocumentRepository.TABLE_DOCUMENTS} d
+                    LEFT JOIN {LegacyDocumentRepository.TABLE_VERSIONS} v 
+                        ON d.CD_DOCUMENTO = v.CD_DOCUMENTO AND d.CD_VERSAO_ATUAL = v.CD_VERSAO
                     WHERE {where_clause}
-                    ORDER BY DATA_CADASTRO DESC
+                    ORDER BY d.DT_CRIACAO DESC
                 ) d
                 WHERE ROWNUM <= :max_row
             )
@@ -125,7 +125,8 @@ class LegacyDocumentRepository:
         params["max_row"] = offset + page_size
         params["min_row"] = offset
 
-        results = await OracleLegacyConnection.execute_query(sql, params)
+        import asyncio
+        results = await asyncio.to_thread(OracleLegacyConnection.execute_query, sql, params)
         logger.info("legacy_search", count=len(results), page=page)
         return results
 
@@ -135,24 +136,25 @@ class LegacyDocumentRepository:
         if not OracleLegacyConnection.is_available():
             return None
 
-        # ADAPTAR: Ajustar SQL ao schema real
         sql = f"""
             SELECT
-                ID_DOCUMENTO,
-                TITULO,
-                TIPO_DOCUMENTO,
-                NOME_PROPRIETARIO,
-                CPF,
-                NUM_PRONTUARIO,
-                DATA_DOCUMENTO,
-                CAMINHO_ARQUIVO,
-                FORMATO_ARQUIVO,
-                QTD_PAGINAS,
-                DATA_CADASTRO
-            FROM {LegacyDocumentRepository.TABLE_DOCUMENTS}
-            WHERE ID_DOCUMENTO = :doc_id
+                d.CD_DOCUMENTO as ID_DOCUMENTO,
+                d.DS_DOCUMENTO as TITULO,
+                d.CD_TIPO_DOCUMENTO as TIPO_DOCUMENTO,
+                'Paciente Legado' as NOME_PROPRIETARIO,
+                '000.000.000-00' as CPF,
+                '' as NUM_PRONTUARIO,
+                d.DT_CRIACAO as DATA_DOCUMENTO,
+                v.TP_FORMATO as FORMATO_ARQUIVO,
+                1 as QTD_PAGINAS,
+                d.DT_CRIACAO as DATA_CADASTRO
+            FROM {LegacyDocumentRepository.TABLE_DOCUMENTS} d
+            LEFT JOIN {LegacyDocumentRepository.TABLE_VERSIONS} v 
+                ON d.CD_DOCUMENTO = v.CD_DOCUMENTO AND d.CD_VERSAO_ATUAL = v.CD_VERSAO
+            WHERE d.CD_DOCUMENTO = :doc_id
             AND ROWNUM = 1
         """
-        return await OracleLegacyConnection.execute_query_one(
-            sql, {"doc_id": legacy_document_id}
+        import asyncio
+        return await asyncio.to_thread(
+            OracleLegacyConnection.execute_query_one, sql, {"doc_id": legacy_document_id}
         )

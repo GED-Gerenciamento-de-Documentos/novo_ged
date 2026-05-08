@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { PatientSearch } from './presentation/components/PatientSearch'
+import { DocumentSearch } from './presentation/components/DocumentSearch'
 import { DocumentUpload } from './presentation/components/DocumentUpload'
 
 type Tab = 'search' | 'upload'
@@ -14,7 +14,7 @@ function App() {
           className={`nav-tab ${activeTab === 'search' ? 'active' : ''}`}
           onClick={() => setActiveTab('search')}
         >
-          🔍 Buscar Paciente
+          🔍 Buscar Documentos
         </button>
         <button
           className={`nav-tab ${activeTab === 'upload' ? 'active' : ''}`}
@@ -24,7 +24,7 @@ function App() {
         </button>
       </nav>
 
-      {activeTab === 'search' && <PatientSearch />}
+      {activeTab === 'search' && <DocumentSearch />}
       {activeTab === 'upload' && <DocumentUpload />}
     </div>
   )

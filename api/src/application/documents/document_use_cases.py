@@ -62,7 +62,59 @@ class SearchDocumentsUseCase:
         self._encryption_service = encryption_service
 
     async def execute(self, input_data: SearchDocumentsInput) -> PaginatedResult:
-        # Criptografar CPF para busca (busca pelo hash criptografado)
+        if input_data.storage_type == StorageType.LEGACY_NFS:
+            from src.infrastructure.database.oracle.legacy_document_repository import LegacyDocumentRepository
+            legacy_results = await LegacyDocumentRepository.search_documents(
+                owner_name=input_data.owner_name,
+                owner_cpf=input_data.owner_cpf,
+                document_type=input_data.document_type.value if input_data.document_type else None,
+                date_from=input_data.date_from,
+                date_to=input_data.date_to,
+                page=input_data.page,
+                page_size=input_data.page_size,
+            )
+            
+            items = []
+            for row in legacy_results:
+                fmt_str = row.get("formato_arquivo", "PDF")
+                try:
+                    file_format = FileFormat(fmt_str.upper())
+                except ValueError:
+                    file_format = FileFormat.PDF
+                
+                # Mock UUID using integer id
+                doc_id_str = str(row["id_documento"]).zfill(32)
+                doc_uuid = uuid.UUID(f"{doc_id_str[:8]}-{doc_id_str[8:12]}-{doc_id_str[12:16]}-{doc_id_str[16:20]}-{doc_id_str[20:]}")
+                
+                # Tentar mapear o tipo
+                try:
+                    doc_type = DocumentType(str(row["tipo_documento"]))
+                except ValueError:
+                    doc_type = DocumentType.OUTRO
+
+                doc = Document(
+                    id=DocumentId(value=doc_uuid),
+                    title=row["titulo"] or "Documento Legado",
+                    document_type=doc_type,
+                    file_format=file_format,
+                    storage_type=StorageType.LEGACY_NFS,
+                    storage_path=str(row["id_documento"]),
+                    owner_name=row["nome_proprietario"] or "Paciente Legado",
+                    owner_record_number=row.get("num_prontuario"),
+                    document_date=row["data_documento"],
+                    created_at=row["data_cadastro"],
+                    updated_at=row["data_cadastro"],
+                )
+                items.append(doc)
+
+            return PaginatedResult(
+                items=items,
+                total=1000, # Mock total para paginação do legado
+                page=input_data.page,
+                page_size=input_data.page_size,
+            )
+
+        # Busca no PostgreSQL (Nuvem)
         encrypted_cpf = None
         if input_data.owner_cpf:
             try:
@@ -134,14 +186,57 @@ class DownloadDocumentUseCase:
 
     async def execute(self, input_data: DownloadDocumentInput) -> DownloadDocumentOutput:
         document = await self._document_repository.find_by_id(input_data.document_id)
+        
+        # Se não achou no Postgres, tenta ver se é legado consultando direto (Mock fallback)
         if not document:
-            raise FileNotFoundError(f"Documento não encontrado: {input_data.document_id}")
+            from src.infrastructure.database.oracle.legacy_document_repository import LegacyDocumentRepository
+            # Recriar ID original do UUID mockado (os ultimos digitos sem zeros a esquerda)
+            hex_str = input_data.document_id.hex
+            legacy_id = str(int(hex_str)) # converte string hexadecimal mockada p/ int
+            
+            detail = await LegacyDocumentRepository.get_document_detail(legacy_id)
+            if not detail:
+                raise FileNotFoundError(f"Documento não encontrado: {input_data.document_id}")
+            
+            # Buscar BLOB no Oracle
+            content = await LegacyDocumentRepository.get_document_content(legacy_id)
+            if not content:
+                raise FileNotFoundError(f"Conteúdo vazio para o documento legado {legacy_id}")
+            
+            file_name = f"{detail.get('titulo', 'documento_legado').replace(' ', '_')}.pdf"
+            content_type = "application/pdf"
+            
+            # Audit log de download
+            audit = AuditLog.create(
+                action=AuditAction.DOWNLOAD,
+                user_id=input_data.user_id,
+                user_email=input_data.user_email,
+                user_role=input_data.user_role,
+                ip_address=input_data.ip_address,
+                user_agent=input_data.user_agent,
+                document_id=input_data.document_id.value,
+                document_title=detail.get('titulo', 'documento_legado'),
+                additional_data={"source": "ORACLE_LEGACY"}
+            )
+            await self._audit_repository.save(audit)
+            
+            return DownloadDocumentOutput(
+                content=content,
+                content_type=content_type,
+                file_name=file_name,
+                file_size=len(content),
+            )
 
         if not document.is_accessible_by(input_data.user_role):
             raise PermissionError("Sem permissão para baixar este documento.")
 
-        storage = self._nfs_storage if document.is_from_legacy() else self._cloud_storage
-        content = await storage.download(document.storage_path)
+        if document.is_from_legacy():
+            from src.infrastructure.database.oracle.legacy_document_repository import LegacyDocumentRepository
+            content = await LegacyDocumentRepository.get_document_content(document.storage_path)
+            if not content:
+                raise FileNotFoundError(f"Conteúdo vazio para o documento legado {document.storage_path}")
+        else:
+            content = await self._cloud_storage.download(document.storage_path)
 
         # Audit log de download
         audit = AuditLog.create(
