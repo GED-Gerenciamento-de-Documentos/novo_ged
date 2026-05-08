@@ -36,7 +36,7 @@ export function DocumentSearch() {
       params.append('page', String(currentPage));
       params.append('page_size', String(currentSize));
 
-      const response = await api.get<DocumentSearchResponse>(`/api/v1/documents?${params.toString()}`);
+      const response = await api.get<DocumentSearchResponse>(`/api/v1/documents/search-dev?${params.toString()}`);
       setData(response.data);
       setPage(currentPage);
     } catch (err: any) {
